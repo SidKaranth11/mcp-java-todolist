@@ -4,23 +4,27 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 
 public class TodoistClient {
 
     private static final String BASE_URL = "https://api.todoist.com/api/v1";
-    private static final String TOKEN = System.getenv("TODOLIST_API_TOKEN");
+    private static final String TOKEN = getToken();
 
     // One HttpClient shared by everything
-    private static final HttpClient CLIENT = HttpClient.newHttpClient();
+    private static final HttpClient CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .build();
 
     // The single place where HTTP happens
     private static String request(String method, String path, String body) throws Exception {
         if (TOKEN == null || TOKEN.isEmpty()) {
-            throw new RuntimeException("MISSING API TOKEN: Set TODOLIST_API_TOKEN in environment variables");
+            return "ERROR: MISSING API TOKEN. Set TODOIST_API_TOKEN in environment variables.";
         }
 
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(BASE_URL + path))
+                .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + TOKEN)
                 .header("Content-Type", "application/json")
                 .method(method, body == null
@@ -31,7 +35,7 @@ public class TodoistClient {
         HttpResponse<String> res = CLIENT.send(req, HttpResponse.BodyHandlers.ofString());
 
         if (res.statusCode() >= 400) {
-            throw new RuntimeException("Request failed (status " + res.statusCode() + "): " + res.body());
+            return "ERROR: Todoist API request failed (status " + res.statusCode() + "): " + res.body();
         }
 
         return res.body();
@@ -54,11 +58,19 @@ public class TodoistClient {
     }
 
     public static String deleteTask(String taskId) throws Exception {
+        if (taskId == null || taskId.isEmpty()) {
+            return "ERROR: Task ID is required to delete a task.";
+        }
+
         request("DELETE", "/tasks/" + taskId, null);
         return "Deleted task " + taskId;
     }
 
     public static String updateTask(String taskId, String content, String description, String dueString) throws Exception {
+
+        if (taskId == null || taskId.isEmpty()) {
+            return "ERROR: Task ID is required to update a task.";
+        }
 
         StringBuilder json = new StringBuilder();
         json.append("{");
@@ -85,7 +97,7 @@ public class TodoistClient {
         json.append("}");
 
         if (!hasField) {
-            throw new RuntimeException("At least one field is required to update task");
+            return "ERROR: At least one field is required to update task.";
         }
 
         return request(
@@ -104,6 +116,17 @@ public class TodoistClient {
                 .replace("\n", "\\n")
                 .replace("\r", "\\r")
                 .replace("\t", "\\t");
+    }
+
+    private static String getToken() {
+        String token = System.getenv("TODOIST_API_TOKEN");
+
+        // Backward compatibility with your original variable name
+        if (token == null || token.isEmpty()) {
+            token = System.getenv("TODOLIST_API_TOKEN");
+        }
+
+        return token;
     }
 
     public static void main(String[] args) throws Exception {
