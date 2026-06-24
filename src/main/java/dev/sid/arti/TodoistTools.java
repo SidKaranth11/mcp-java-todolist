@@ -7,6 +7,19 @@ import org.springframework.stereotype.Service;
 @Service
 public class TodoistTools {
 
+    @Tool(
+            name = "list_todoist_tasks",
+            description = "List active Todoist tasks. Use this before update or delete when the user gives a task name instead of a task ID."
+    )
+    public String listTasks() {
+        try {
+            String response = TodoistClient.listTasks();
+            return "Active Todoist tasks retrieved successfully. Response: " + response;
+        } catch (Exception e) {
+            return error("list Todoist tasks", e);
+        }
+    }
+
     @Tool(name = "create_todoist_task", description = "Create a Todoist task")
     public String createTask(
             @ToolParam(description = "Task content or title") String content,
@@ -14,24 +27,17 @@ public class TodoistTools {
             @ToolParam(description = "Optional due date like today, tomorrow, next Monday", required = false) String dueString
     ) {
         try {
-            return TodoistClient.createTask(content, description, dueString);
+            String response = TodoistClient.createTask(content, description, dueString);
+            return "Todoist task created successfully. Response: " + response;
         } catch (Exception e) {
-            return "ERROR: Failed to create Todoist task: " + getErrorMessage(e);
+            return error("create Todoist task", e);
         }
     }
 
-    @Tool(name = "delete_todoist_task", description = "Delete a Todoist task by task ID")
-    public String deleteTask(
-            @ToolParam(description = "Todoist task ID") String taskId
-    ) {
-        try {
-            return TodoistClient.deleteTask(taskId);
-        } catch (Exception e) {
-            return "ERROR: Failed to delete Todoist task: " + getErrorMessage(e);
-        }
-    }
-
-    @Tool(name = "update_todoist_task", description = "Update a Todoist task")
+    @Tool(
+            name = "update_todoist_task",
+            description = "Update a Todoist task by task ID. If the user does not provide a task ID, first call list_todoist_tasks."
+    )
     public String updateTask(
             @ToolParam(description = "Todoist task ID") String taskId,
             @ToolParam(description = "New task content or title", required = false) String content,
@@ -39,16 +45,29 @@ public class TodoistTools {
             @ToolParam(description = "New due date", required = false) String dueString
     ) {
         try {
-            return TodoistClient.updateTask(taskId, content, description, dueString);
+            String response = TodoistClient.updateTask(taskId, content, description, dueString);
+            return "Todoist task updated successfully. Response: " + response;
         } catch (Exception e) {
-            return "ERROR: Failed to update Todoist task: " + getErrorMessage(e);
+            return error("update Todoist task", e);
         }
     }
 
-    private String getErrorMessage(Exception e) {
-        if (e.getMessage() == null || e.getMessage().isEmpty()) {
-            return e.getClass().getSimpleName();
+    @Tool(
+            name = "delete_todoist_task",
+            description = "Delete a Todoist task by task ID. If the user does not provide a task ID, first call list_todoist_tasks."
+    )
+    public String deleteTask(
+            @ToolParam(description = "Todoist task ID") String taskId
+    ) {
+        try {
+            return TodoistClient.deleteTask(taskId);
+        } catch (Exception e) {
+            return error("delete Todoist task", e);
         }
-        return e.getMessage();
+    }
+
+    private String error(String action, Exception e) {
+        String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        return "Failed to " + action + ": " + message;
     }
 }

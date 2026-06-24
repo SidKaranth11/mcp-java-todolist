@@ -1,55 +1,76 @@
 package dev.sid.arti;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 
 public class TodoistClient {
 
     private static final String BASE_URL = "https://api.todoist.com/api/v1";
-    private static final String TOKEN = getToken();
 
-    // One HttpClient shared by everything
+    private static final String TOKEN = firstNonBlank(
+            System.getenv("TODOIST_API_TOKEN"),
+            System.getenv("TODOLIST_API_TOKEN")
+    );
+
     private static final HttpClient CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .build();
 
-    // The single place where HTTP happens
     private static String request(String method, String path, String body) throws Exception {
-        if (TOKEN == null || TOKEN.isEmpty()) {
-            return "ERROR: MISSING API TOKEN. Set TODOIST_API_TOKEN in environment variables.";
+        if (TOKEN == null || TOKEN.isBlank()) {
+            throw new RuntimeException(
+                    "Missing Todoist API token. Set TODOIST_API_TOKEN in Render environment variables."
+            );
         }
 
-        HttpRequest req = HttpRequest.newBuilder()
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(BASE_URL + path))
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + TOKEN)
-                .header("Content-Type", "application/json")
-                .method(method, body == null
-                        ? HttpRequest.BodyPublishers.noBody()
-                        : HttpRequest.BodyPublishers.ofString(body))
-                .build();
+                .header("Accept", "application/json");
 
-        HttpResponse<String> res = CLIENT.send(req, HttpResponse.BodyHandlers.ofString());
-
-        if (res.statusCode() >= 400) {
-            return "ERROR: Todoist API request failed (status " + res.statusCode() + "): " + res.body();
+        if (body != null) {
+            builder.header("Content-Type", "application/json")
+                    .method(method, HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+        } else {
+            builder.method(method, HttpRequest.BodyPublishers.noBody());
         }
 
-        return res.body();
+        HttpResponse<String> response = CLIENT.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() >= 400) {
+            throw new RuntimeException(
+                    "Todoist API request failed. HTTP " + response.statusCode() + ": " + response.body()
+            );
+        }
+
+        return response.body() == null ? "" : response.body();
+    }
+
+    public static String listTasks() throws Exception {
+        return request("GET", "/tasks", null);
     }
 
     public static String createTask(String content, String description, String dueString) throws Exception {
-        StringBuilder json = new StringBuilder("{\"content\":\"" + escapeJson(content) + "\"");
-
-        if (description != null && !description.isEmpty()) {
-            json.append(",\"description\":\"").append(escapeJson(description)).append("\"");
+        if (content == null || content.isBlank()) {
+            throw new RuntimeException("Task content/title is required.");
         }
 
-        if (dueString != null && !dueString.isEmpty()) {
-            json.append(",\"due_string\":\"").append(escapeJson(dueString)).append("\"");
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"content\":\"").append(escapeJson(content.trim())).append("\"");
+
+        if (description != null && !description.isBlank()) {
+            json.append(",\"description\":\"").append(escapeJson(description.trim())).append("\"");
+        }
+
+        if (dueString != null && !dueString.isBlank()) {
+            json.append(",\"due_string\":\"").append(escapeJson(dueString.trim())).append("\"");
         }
 
         json.append("}");
@@ -57,54 +78,66 @@ public class TodoistClient {
         return request("POST", "/tasks", json.toString());
     }
 
-    public static String deleteTask(String taskId) throws Exception {
-        if (taskId == null || taskId.isEmpty()) {
-            return "ERROR: Task ID is required to delete a task.";
-        }
-
-        request("DELETE", "/tasks/" + taskId, null);
-        return "Deleted task " + taskId;
-    }
-
     public static String updateTask(String taskId, String content, String description, String dueString) throws Exception {
-
-        if (taskId == null || taskId.isEmpty()) {
-            return "ERROR: Task ID is required to update a task.";
-        }
+        validateTaskId(taskId);
 
         StringBuilder json = new StringBuilder();
         json.append("{");
 
         boolean hasField = false;
 
-        if (content != null && !content.isEmpty()) {
-            json.append("\"content\":\"").append(escapeJson(content)).append("\"");
+        if (content != null && !content.isBlank()) {
+            json.append("\"content\":\"").append(escapeJson(content.trim())).append("\"");
             hasField = true;
         }
 
-        if (description != null && !description.isEmpty()) {
+        if (description != null && !description.isBlank()) {
             if (hasField) json.append(",");
-            json.append("\"description\":\"").append(escapeJson(description)).append("\"");
+            json.append("\"description\":\"").append(escapeJson(description.trim())).append("\"");
             hasField = true;
         }
 
-        if (dueString != null && !dueString.isEmpty()) {
+        if (dueString != null && !dueString.isBlank()) {
             if (hasField) json.append(",");
-            json.append("\"due_string\":\"").append(escapeJson(dueString)).append("\"");
+            json.append("\"due_string\":\"").append(escapeJson(dueString.trim())).append("\"");
             hasField = true;
         }
 
         json.append("}");
 
         if (!hasField) {
-            return "ERROR: At least one field is required to update task.";
+            throw new RuntimeException("At least one update field is required: content, description, or dueString.");
         }
 
-        return request(
-                "POST",
-                "/tasks/" + taskId,
-                json.toString()
-        );
+        return request("POST", "/tasks/" + urlEncode(taskId.trim()), json.toString());
+    }
+
+    public static String deleteTask(String taskId) throws Exception {
+        validateTaskId(taskId);
+        request("DELETE", "/tasks/" + urlEncode(taskId.trim()), null);
+        return "Task deleted successfully. Task ID: " + taskId.trim();
+    }
+
+    private static void validateTaskId(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            throw new RuntimeException("Todoist task ID is required. First call list_todoist_tasks to find the task ID.");
+        }
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) return null;
+
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static String urlEncode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     private static String escapeJson(String value) {
@@ -116,37 +149,5 @@ public class TodoistClient {
                 .replace("\n", "\\n")
                 .replace("\r", "\\r")
                 .replace("\t", "\\t");
-    }
-
-    private static String getToken() {
-        String token = System.getenv("TODOIST_API_TOKEN");
-
-        // Backward compatibility with your original variable name
-        if (token == null || token.isEmpty()) {
-            token = System.getenv("TODOLIST_API_TOKEN");
-        }
-
-        return token;
-    }
-
-    public static void main(String[] args) throws Exception {
-
-        if (args.length == 0) {
-            System.out.println("Usage:");
-            System.out.println("java TodoistClient \"Task title\" \"Description\" \"Due date\"");
-            return;
-        }
-
-        String content = args[0];
-        String description = args.length > 1 ? args[1] : null;
-        String dueString = args.length > 2 ? args[2] : null;
-
-        String response = TodoistClient.createTask(
-                content,
-                description,
-                dueString
-        );
-
-        System.out.println(response);
     }
 }
